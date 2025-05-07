@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, font
 import subprocess
 import threading
 import time
@@ -9,7 +9,7 @@ class PingApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Ping Monitor")
-        self.root.geometry("500x400")
+        self.root.geometry("600x450")
         
         # Make the window resizable
         self.root.grid_rowconfigure(0, weight=1)
@@ -20,6 +20,11 @@ class PingApp:
         self.is_pinging = False
         self.start_time = None
         self.message_queue = queue.Queue()
+        
+        # Create custom fonts
+        self.normal_font = font.Font(family="Consolas", size=10)
+        self.bold_font = font.Font(family="Consolas", size=10, weight="bold")
+        self.large_bold_font = font.Font(family="Consolas", size=12, weight="bold")
         
         # GUI Elements
         self.create_widgets()
@@ -57,11 +62,26 @@ class PingApp:
         self.scrollbar = tk.Scrollbar(text_frame)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.result_text = tk.Text(text_frame, height=15, width=60, state=tk.DISABLED, 
-                                 yscrollcommand=self.scrollbar.set, wrap=tk.WORD)
+        self.result_text = tk.Text(
+            text_frame, 
+            height=15, 
+            width=70, 
+            state=tk.DISABLED, 
+            yscrollcommand=self.scrollbar.set, 
+            wrap=tk.WORD,
+            font=self.normal_font,
+            bg='#f0f0f0'
+        )
         self.result_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
         self.scrollbar.config(command=self.result_text.yview)
+
+        # Configure tags for colored text
+        self.result_text.tag_config('good', foreground='green')
+        self.result_text.tag_config('warning', foreground='orange')
+        self.result_text.tag_config('bad', foreground='red')
+        self.result_text.tag_config('error', foreground='red', font=self.large_bold_font)
+        self.result_text.tag_config('header', font=self.bold_font)
+        self.result_text.tag_config('normal', font=self.normal_font)
 
         # Status bar
         self.status_var = tk.StringVar()
@@ -73,18 +93,32 @@ class PingApp:
         """Check the message queue for updates from the ping thread"""
         try:
             while True:
-                message = self.message_queue.get_nowait()
-                self.update_display(message)
+                msg_type, message = self.message_queue.get_nowait()
+                self.update_display(msg_type, message)
         except queue.Empty:
             pass
         
         # Schedule to check again after 100ms
         self.root.after(100, self.check_queue)
 
-    def update_display(self, message):
+    def update_display(self, msg_type, message):
         """Update the display with a new message"""
         self.result_text.config(state=tk.NORMAL)
-        self.result_text.insert(tk.END, message + "\n")
+        
+        # Insert message with appropriate formatting
+        if msg_type == 'error':
+            self.result_text.insert(tk.END, message + "\n", 'error')
+        elif msg_type == 'good':
+            self.result_text.insert(tk.END, message + "\n", 'good')
+        elif msg_type == 'warning':
+            self.result_text.insert(tk.END, message + "\n", 'warning')
+        elif msg_type == 'bad':
+            self.result_text.insert(tk.END, message + "\n", 'bad')
+        elif msg_type == 'header':
+            self.result_text.insert(tk.END, message + "\n", 'header')
+        else:
+            self.result_text.insert(tk.END, message + "\n", 'normal')
+            
         self.result_text.see(tk.END)  # Auto-scroll to bottom
         self.result_text.config(state=tk.DISABLED)
 
@@ -105,8 +139,8 @@ class PingApp:
         self.result_text.config(state=tk.DISABLED)
         
         self.update_status("Pinging google.com...")
-        self.message_queue.put("Pinging started at " + time.strftime("%H:%M:%S"))
-        self.message_queue.put("Pinging google.com...")
+        self.message_queue.put(('header', "Pinging started at " + time.strftime("%H:%M:%S")))
+        self.message_queue.put(('header', "Pinging google.com..."))
 
         # Start ping in a separate thread
         self.ping_thread = threading.Thread(target=self.ping_google, daemon=True)
@@ -147,27 +181,36 @@ class PingApp:
                         time_str = output.stdout.split("time=")[1].split(" ")[0]
                         ping_time = float(time_str.replace("ms", ""))
                         self.ping_results.append(ping_time)
-                        self.message_queue.put(f"Ping #{ping_count} ({current_time:.1f}s): {ping_time}ms")
+                        
+                        # Determine message type based on ping time
+                        if ping_time < 50:
+                            msg_type = 'good'
+                        elif 50 <= ping_time < 100:
+                            msg_type = 'warning'
+                        else:
+                            msg_type = 'bad'
+                            
+                        self.message_queue.put((msg_type, f"Ping #{ping_count} ({current_time:.1f}s): {ping_time}ms"))
                     else:
                         self.ping_results.append(None)
-                        self.message_queue.put(f"Ping #{ping_count} ({current_time:.1f}s): Success but no time value")
+                        self.message_queue.put(('warning', f"Ping #{ping_count} ({current_time:.1f}s): Success but no time value"))
                 else:
                     self.ping_results.append(None)
-                    self.message_queue.put(f"Ping #{ping_count} ({current_time:.1f}s): Request timed out")
+                    self.message_queue.put(('error', f"Ping #{ping_count} ({current_time:.1f}s): REQUEST TIMED OUT!"))
 
             except Exception as e:
                 self.ping_results.append(None)
-                self.message_queue.put(f"Ping #{ping_count} ({current_time:.1f}s): Error - {str(e)}")
+                self.message_queue.put(('error', f"Ping #{ping_count} ({current_time:.1f}s): ERROR - {str(e)}"))
 
             time.sleep(1)  # Wait for 1 second before next ping
 
         self.is_pinging = False
-        self.message_queue.put("Ping stopped at " + time.strftime("%H:%M:%S"))
+        self.message_queue.put(('header', "Ping stopped at " + time.strftime("%H:%M:%S")))
         self.root.after(100, self.display_final_results)
 
     def display_final_results(self):
         if not self.ping_results:
-            self.message_queue.put("No ping results found.")
+            self.message_queue.put(('normal', "No ping results found."))
             return
 
         # Calculate statistics
@@ -182,13 +225,41 @@ class PingApp:
         else:
             avg_ping = max_ping = min_ping = "N/A"
 
-        # Display results
-        self.message_queue.put("\n=== Final Results ===")
-        self.message_queue.put(f"Total pings sent: {total_pings}")
-        self.message_queue.put(f"Average Ping: {avg_ping if avg_ping == 'N/A' else f'{avg_ping:.2f} ms'}")
-        self.message_queue.put(f"Highest Ping: {max_ping if max_ping == 'N/A' else f'{max_ping} ms'}")
-        self.message_queue.put(f"Lowest Ping: {min_ping if min_ping == 'N/A' else f'{min_ping} ms'}")
-        self.message_queue.put(f"Packet Loss: {lost_connections}/{total_pings} ({lost_connections/total_pings*100:.1f}%)")
+        # Display results with appropriate formatting
+        self.message_queue.put(('header', "\n=== Final Results ==="))
+        self.message_queue.put(('normal', f"Total pings sent: {total_pings}"))
+        
+        if avg_ping != "N/A":
+            # Color code the average ping based on its value
+            if avg_ping < 50:
+                avg_msg_type = 'good'
+            elif 50 <= avg_ping < 100:
+                avg_msg_type = 'warning'
+            else:
+                avg_msg_type = 'bad'
+            self.message_queue.put((avg_msg_type, f"Average Ping: {avg_ping:.2f} ms"))
+        else:
+            self.message_queue.put(('normal', f"Average Ping: N/A"))
+        
+        if max_ping != "N/A":
+            self.message_queue.put(('bad', f"Highest Ping: {max_ping} ms"))
+        else:
+            self.message_queue.put(('normal', f"Highest Ping: N/A"))
+            
+        if min_ping != "N/A":
+            if min_ping < 50:
+                min_msg_type = 'good'
+            else:
+                min_msg_type = 'normal'
+            self.message_queue.put((min_msg_type, f"Lowest Ping: {min_ping} ms"))
+        else:
+            self.message_queue.put(('normal', f"Lowest Ping: N/A"))
+            
+        loss_percentage = lost_connections/total_pings*100 if total_pings > 0 else 0
+        if loss_percentage > 10:  # Highlight if packet loss is significant
+            self.message_queue.put(('error', f"Packet Loss: {lost_connections}/{total_pings} ({loss_percentage:.1f}%)"))
+        else:
+            self.message_queue.put(('normal', f"Packet Loss: {lost_connections}/{total_pings} ({loss_percentage:.1f}%)"))
 
 if __name__ == "__main__":
     root = tk.Tk()
